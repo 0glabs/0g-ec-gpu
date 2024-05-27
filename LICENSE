@@ -1,0 +1,20 @@
+# LICENSE
+
+## Project License Statement
+
+This project, including the modification parts / additional parts of the derivative, does not provide any license. Unauthorized copying, distribution, and use of these parts are prohibited.
+
+## Open Source Project Derivative Work Statement
+
+### ec-gpu
+
+The `ag-build` directory and `ag-type` directory of this project are derived from the [ec-gpu](https://github.com/filecoin-project/ec-gpu) project, which is licensed under the Apache License 2.0. For details, see `licenses/LICENSE-ec-gpu`[licenses/LICENSE-ec-gpu].
+
+This project includes modifications to the upstream project:
+
+1. In the `ag-build` crate:
+   - `cl/ec-fft.cl` is newly developed.
+   - `cl/multiexp.cl` has been rewritten with new algorithm logic.
+   
+2. In the `ag-type` crate:
+   - `GpuCurveName` and `GpuCurveAffine` and related code are newly added.

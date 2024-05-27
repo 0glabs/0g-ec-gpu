@@ -1,0 +1,27 @@
+[package]
+name = "ag-build"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ag-types = { workspace = true }
+ark-ff = { workspace = true }
+
+hex = "0.4"
+log = "0.4.14"
+sha2 = "0.10"
+execute = "0.2.9"
+tempfile = "3.2.0"
+
+[dev-dependencies]
+rust-gpu-tools = { workspace = true }
+chosen-ark-suite = { package = "ark-bls12-381", version = "0.4.0" }
+lazy_static = { workspace = true }
+rand = "0.8"
+
+[features]
+default = ["cuda"]
+cuda = ["rust-gpu-tools/cuda"]
+opencl = ["rust-gpu-tools/opencl"]

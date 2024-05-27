@@ -1,0 +1,20 @@
+[workspace]
+members = [
+  "ag-types",
+  "ag-build",
+  "ag-cuda-proxy",
+  "ag-cuda-ec", 
+  "ag-cuda-workspace-macro",
+]
+resolver = "2"
+
+[workspace.dependencies]
+ag-types = { path = "./ag-types" }
+ag-build = { path = "./ag-build" }
+ag-cuda-proxy = { path = "./ag-cuda-proxy" }
+ag-cuda-workspace-macro  = { path = "./ag-cuda-workspace-macro"}
+
+rust-gpu-tools = { version = "0.7.0", default-features = false }
+ark-ff = "0.4.0"
+lazy_static = "1.2"
+rustacuda = { package = "fil-rustacuda", version = "0.1.4" }
