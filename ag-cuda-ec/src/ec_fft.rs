@@ -81,7 +81,6 @@ pub fn radix_ec_fft(
             .launch(config)?
             .complete()?;
 
-
         log_p += deg;
         DeviceParam::swap_device_pointer(&mut input_gpu, &mut output_gpu);
     }
