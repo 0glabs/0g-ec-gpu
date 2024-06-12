@@ -116,7 +116,7 @@ pub struct DeviceParam<'a, T> {
 
 impl<'a, T> DeviceParam<'a, T> {
     pub fn new(val: &'a mut [T]) -> CudaResult<Self> {
-        let size = val.len() * std::mem::size_of::<T>();
+        let size = std::mem::size_of_val(val);
         let buffer = unsafe { DeviceBuffer::<u8>::uninitialized(size)? };
 
         Ok(Self {
@@ -127,7 +127,7 @@ impl<'a, T> DeviceParam<'a, T> {
 
     pub fn to_device(&mut self, stream: &Stream) -> CudaResult<()> {
         use rustacuda::memory::AsyncCopyDestination;
-        let size = self.host_mem.len() * std::mem::size_of::<T>();
+        let size = std::mem::size_of_val(self.host_mem);
 
         let bytes = unsafe {
             std::slice::from_raw_parts(
@@ -142,7 +142,7 @@ impl<'a, T> DeviceParam<'a, T> {
 
     pub fn to_host(&mut self, stream: &Stream) -> CudaResult<()> {
         use rustacuda::memory::AsyncCopyDestination;
-        let size = self.host_mem.len() * std::mem::size_of::<T>();
+        let size = std::mem::size_of_val(self.host_mem);
 
         let bytes = unsafe {
             std::slice::from_raw_parts_mut(
@@ -186,7 +186,7 @@ impl DeviceData {
     pub fn upload<T>(val: &[T], stream: &Stream) -> CudaResult<Self> {
         use rustacuda::memory::AsyncCopyDestination;
 
-        let size = val.len() * std::mem::size_of::<T>();
+        let size = std::mem::size_of_val(val);
         let mut buffer = unsafe { DeviceBuffer::<u8>::uninitialized(size)? };
 
         let bytes = unsafe {
@@ -219,9 +219,9 @@ impl<'b> ParamIO for &'b DeviceData {
 
 pub(crate) struct NullPointer;
 
-impl<'a> ParamIO for NullPointer {
+impl ParamIO for NullPointer {
     fn param_pointer(&self) -> *mut c_void {
-        const NULL: &'static [u8; 0] = &[];
+        const NULL: &[u8; 0] = &[];
         (&NULL) as *const _ as *mut c_void
     }
 
