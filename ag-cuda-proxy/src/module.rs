@@ -41,9 +41,9 @@ impl CudaWorkspace {
         })
     }
 
-    pub fn activate<'a>(&'a self) -> CudaResult<ActiveWorkspace<'a>> {
+    pub fn activate(&self) -> CudaResult<ActiveWorkspace<'_>> {
         let guard = WorkspaceContextGuard::new(&self.context)?;
-        Ok(ActiveWorkspace(&self, guard))
+        Ok(ActiveWorkspace(self, guard))
     }
 }
 

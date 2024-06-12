@@ -11,5 +11,5 @@ pub fn random_input_by_cycle<T: UniformRand + Clone, R: Rng>(
     length: usize, period: usize, rng: &mut R,
 ) -> Vec<T> {
     let meta = random_input(period, rng);
-    meta.iter().cycle().cloned().take(length).collect()
+    meta.iter().cycle().take(length).cloned().collect()
 }

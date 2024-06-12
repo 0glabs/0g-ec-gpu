@@ -8,7 +8,8 @@ use syn::{parse_macro_input, ExprClosure, FnArg, Ident, ItemFn, PatType};
 pub fn auto_workspace(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(item as ItemFn);
 
-    if input_fn.sig.inputs.len() < 1 {
+    // ensure that the function has at least one parameter
+    if input_fn.sig.inputs.is_empty() {
         return syn::Error::new_spanned(
             &input_fn.sig.inputs,
             "Function must have at least one parameter",

@@ -156,7 +156,7 @@ fn write_field(
     field: &BTreeSet<Box<dyn NameAndSource>>,
 ) {
     for item in field {
-        write!(result, "{}\n", item.source(limb_size)).unwrap();
+        writeln!(result, "{}", item.source(limb_size)).unwrap();
     }
     write!(result, "\n\n").unwrap();
 }

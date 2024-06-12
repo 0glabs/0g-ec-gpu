@@ -10,7 +10,7 @@ where Self: PrimeField
 {
     type Repr = BigInt<N>;
 
-    fn to_bigint(&self) -> Self::Repr { MontConfig::into_bigint(self.clone()) }
+    fn to_bigint(&self) -> Self::Repr { MontConfig::into_bigint(*self) }
 
     fn from_bigint(repr: Self::Repr) -> Option<Self> {
         MontConfig::from_bigint(repr)
@@ -66,7 +66,7 @@ where
     type Curve = <Affine<P> as ark_ec::AffineRepr>::Group;
     type Scalar = <Affine<P> as ark_ec::AffineRepr>::ScalarField;
 
-    fn is_identity(&self) -> bool { Affine::is_zero(&self) }
+    fn is_identity(&self) -> bool { Affine::is_zero(self) }
 }
 
 impl<T: GpuCurveAffine> GpuCurveName for T {

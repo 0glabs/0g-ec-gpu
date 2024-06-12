@@ -5,7 +5,7 @@ use rustacuda::{context::ContextStack, error::CudaResult};
 use crate::context::CudaContext;
 
 thread_local! {
-    static CONTEXT_GUARD: Cell<bool> = Cell::new(false);
+    static CONTEXT_GUARD: Cell<bool> = const { Cell::new(false) };
 }
 
 fn lock_cu_context() -> bool { !CONTEXT_GUARD.replace(true) }

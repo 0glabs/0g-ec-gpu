@@ -115,7 +115,7 @@ pub fn multiple_multiexp<T: GpuCurveAffine<Scalar = Scalar>>(
         .func(&kernel_name)?
         .dev_data(bases_gpu)?
         .out_slice(&mut output)?
-        .in_ref_slice(&exponents)?
+        .in_ref_slice(exponents)?
         .dev_data(&buckets)?
         .val(input_len as u32)?
         .val(num_lines as u32)?
