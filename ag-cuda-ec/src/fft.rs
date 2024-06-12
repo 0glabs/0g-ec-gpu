@@ -8,54 +8,42 @@ use rustacuda::error::CudaResult;
 
 use crate::{GLOBAL, LOCAL};
 
-#[auto_workspace]
-pub fn radix_ec_fft(
-    workspace: &ActiveWorkspace, input: &mut [Curve], omegas: &[Scalar],
-) -> CudaResult<()> {
-    radix_ec_fft_dist(
-        workspace,
-        input,
-        omegas,
-        Scalar::one(),
-        Scalar::one(),
-        false,
-    )
+pub trait GpuFftElem: Zero + Clone + Copy {
+    const TWIDDLE_LIST: bool;
+    fn name() -> String;
+}
+impl GpuFftElem for Scalar {
+    const TWIDDLE_LIST: bool = true;
+
+    fn name() -> String { <Scalar as GpuName>::name() }
+}
+impl GpuFftElem for Curve {
+    const TWIDDLE_LIST: bool = false;
+
+    fn name() -> String { <Affine as GpuName>::name() }
 }
 
 #[auto_workspace]
-pub fn radix_ec_fft_dist(
-    workspace: &ActiveWorkspace, input: &mut [Curve], omegas: &[Scalar],
-    g: Scalar, c: Scalar, after: bool,
+pub fn radix_fft<T: GpuFftElem>(
+    workspace: &ActiveWorkspace, input: &mut [T], omegas: &[Scalar],
+    offset: Option<Scalar>,
 ) -> CudaResult<()> {
-    radix_fft(workspace, input, omegas, g, c, after, Affine::name(), false)
+    let offset = offset.unwrap_or(Scalar::one());
+    radix_fft_inner(workspace, input, omegas, offset, Scalar::one(), false)
 }
 
 #[auto_workspace]
-pub fn radix_scalar_fft(
-    workspace: &ActiveWorkspace, input: &mut [Scalar], omegas: &[Scalar],
+pub fn radix_ifft<T: GpuFftElem>(
+    workspace: &ActiveWorkspace, input: &mut [T], omegas: &[Scalar],
+    offset_inv: Option<Scalar>, size_inv: Scalar,
 ) -> CudaResult<()> {
-    radix_scalar_fft_dist(
-        workspace,
-        input,
-        omegas,
-        Scalar::one(),
-        Scalar::one(),
-        false,
-    )
+    let offset = offset_inv.unwrap_or(Scalar::one());
+    radix_fft_inner(workspace, input, omegas, offset, size_inv, true)
 }
 
-#[auto_workspace]
-pub fn radix_scalar_fft_dist(
-    workspace: &ActiveWorkspace, input: &mut [Scalar], omegas: &[Scalar],
-    g: Scalar, c: Scalar, after: bool,
-) -> CudaResult<()> {
-    radix_fft(workspace, input, omegas, g, c, after, Scalar::name(), true)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn radix_fft<T: Zero + Clone + Copy>(
+fn radix_fft_inner<T: GpuFftElem>(
     workspace: &ActiveWorkspace, input: &mut [T], omegas: &[Scalar], g: Scalar,
-    c: Scalar, after: bool, name: String, twiddle_list: bool,
+    c: Scalar, after: bool,
 ) -> CudaResult<()> {
     const MAX_LOG2_RADIX: u32 = 8;
 
@@ -76,7 +64,7 @@ fn radix_fft<T: Zero + Clone + Copy>(
 
     let twiddle = {
         let p = omegas[(log_n - max_deg) as usize];
-        if !twiddle_list {
+        if !T::TWIDDLE_LIST {
             vec![p]
         } else {
             (0..(1 << (max_deg - 1))).map(|i| p.pow([i])).collect()
@@ -111,7 +99,7 @@ fn radix_fft<T: Zero + Clone + Copy>(
             shared_mem: 0,
         };
         kernel = kernel
-            .func(&format!("{}_mul_by_field", name))?
+            .func(&format!("{}_mul_by_field", T::name()))?
             .dev_arg(&input_gpu)?
             .val(n)?
             .val(g)?
@@ -152,7 +140,7 @@ fn radix_fft<T: Zero + Clone + Copy>(
                 * physical_local_work_size as usize,
         };
 
-        let kernel_name = format!("{}_radix_fft", name);
+        let kernel_name = format!("{}_radix_fft", T::name());
 
         kernel = kernel
             .func(&kernel_name)?
@@ -182,7 +170,7 @@ fn radix_fft<T: Zero + Clone + Copy>(
             shared_mem: 0,
         };
         kernel
-            .func(&format!("{}_mul_by_field", name))?
+            .func(&format!("{}_mul_by_field", T::name()))?
             .dev_arg(&input_gpu)?
             .val(n)?
             .val(g)?
@@ -226,7 +214,7 @@ mod tests {
             let mut v2_coeffs = v1_coeffs.clone();
 
             // Evaluate with GPU
-            radix_ec_fft_mt(&mut v1_coeffs, &omegas[..]).unwrap();
+            radix_fft_mt::<Curve>(&mut v1_coeffs, &omegas[..], None).unwrap();
 
             // Evaluate with CPU
             let fft_domain =
@@ -259,7 +247,7 @@ mod tests {
             let mut v2_coeffs = v1_coeffs.clone();
 
             // Evaluate with GPU
-            radix_scalar_fft_mt(&mut v1_coeffs, &omegas[..]).unwrap();
+            radix_fft_mt::<Scalar>(&mut v1_coeffs, &omegas[..], None).unwrap();
 
             // Evaluate with CPU
             let fft_domain =
@@ -301,12 +289,11 @@ mod tests {
                 Radix2EvaluationDomain::<Scalar>::new(v2_coeffs.len()).unwrap();
 
             // Evaluate with GPU
-            radix_scalar_fft_dist_mt(
+            radix_ifft_mt::<Scalar>(
                 &mut v1_coeffs,
                 &omegas[..],
-                Scalar::one(),
+                None,
                 fft_domain.size_inv,
-                true,
             )
             .unwrap();
 
@@ -344,12 +331,10 @@ mod tests {
                     .unwrap();
 
             // Evaluate with GPU
-            radix_scalar_fft_dist_mt(
+            radix_fft_mt::<Scalar>(
                 &mut v1_coeffs,
                 &omegas[..],
-                Scalar::from(4u64),
-                Scalar::one(),
-                false,
+                Some(Scalar::from(4u64)),
             )
             .unwrap();
 
@@ -390,12 +375,11 @@ mod tests {
                     .unwrap();
 
             // Evaluate with GPU
-            radix_scalar_fft_dist_mt(
+            radix_ifft_mt::<Scalar>(
                 &mut v1_coeffs,
                 &omegas[..],
-                Scalar::from(4u64).inverse().unwrap(),
+                Some(Scalar::from(4u64).inverse().unwrap()),
                 fft_domain.size_inv,
-                true,
             )
             .unwrap();
 
@@ -436,12 +420,11 @@ mod tests {
                     .unwrap();
 
             // Evaluate with GPU
-            radix_ec_fft_dist_mt(
+            radix_ifft_mt::<Curve>(
                 &mut v1_coeffs,
                 &omegas[..],
-                Scalar::from(4u64).inverse().unwrap(),
+                Some(Scalar::from(4u64).inverse().unwrap()),
                 fft_domain.size_inv,
-                true,
             )
             .unwrap();
 

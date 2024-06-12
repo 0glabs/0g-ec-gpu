@@ -1,13 +1,13 @@
 use ag_cuda_ec::{
     fft::*,
     init_global_workspace, init_local_workspace,
-    pairing_suite::{Affine, Scalar},
+    pairing_suite::{Affine, Curve, Scalar},
     test_tools::random_input,
 };
 use ark_ec::AffineRepr;
 use ark_ff::{FftField, Field, UniformRand};
 use ark_poly::{EvaluationDomain, Radix2EvaluationDomain};
-use ark_std::{rand::thread_rng, One, Zero};
+use ark_std::{rand::thread_rng, Zero};
 use rayon::iter::ParallelIterator;
 use std::time::Instant;
 
@@ -21,7 +21,7 @@ fn bench_ec_fft_sequential() {
     let mut rng = thread_rng();
     init_global_workspace();
 
-    for degree in 16..24usize {
+    for degree in 8..12usize {
         let n: usize = 1 << degree;
 
         println!("Testing FFTg for {} elements...", n);
@@ -45,14 +45,7 @@ fn bench_ec_fft_sequential() {
 
         // Evaluate with GPU
         let now = Instant::now();
-        radix_scalar_fft_dist_st(
-            &mut v1_coeffs,
-            &omegas[..],
-            Scalar::one(),
-            fft_domain.size_inv,
-            true,
-        )
-        .unwrap();
+        radix_fft_st::<Curve>(&mut v1_coeffs, &omegas[..], None).unwrap();
         let gpu_dur = now.elapsed().as_millis();
         println!("GPU took {}ms.", gpu_dur);
 
@@ -91,7 +84,7 @@ fn bench_ec_fft_parallel() {
 
         let now = Instant::now();
         // Evaluate with GPU
-        radix_ec_fft_mt(&mut v1_coeffs, &omegas[..]).unwrap();
+        radix_fft_mt(&mut v1_coeffs, &omegas[..], None).unwrap();
         let gpu_dur = now.elapsed().as_millis();
         println!("GPU took {}ms.", gpu_dur);
 
@@ -103,7 +96,7 @@ fn bench_ec_fft_parallel() {
 
         let now = Instant::now();
         // Evaluate with GPU
-        radix_ec_fft_mt(&mut v1_coeffs, &omegas2[..]).unwrap();
+        radix_fft_mt(&mut v1_coeffs, &omegas2[..], None).unwrap();
         let gpu_dur = now.elapsed().as_millis();
         println!("GPU took {}ms.", gpu_dur);
 
