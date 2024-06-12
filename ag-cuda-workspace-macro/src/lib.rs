@@ -19,7 +19,7 @@ pub fn auto_workspace(_attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     let fn_name = &input_fn.sig.ident;
-    let generics = &input_fn.sig.generics; 
+    let generics = &input_fn.sig.generics;
     let generic_args_call = if generics.params.is_empty() {
         quote! {}
     } else {

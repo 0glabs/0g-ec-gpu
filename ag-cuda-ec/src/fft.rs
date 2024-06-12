@@ -10,7 +10,7 @@ use crate::{GLOBAL, LOCAL};
 
 #[auto_workspace]
 pub fn radix_ec_fft(
-    workspace: &ActiveWorkspace, input: &mut Vec<Curve>, omegas: &[Scalar],
+    workspace: &ActiveWorkspace, input: &mut [Curve], omegas: &[Scalar],
 ) -> CudaResult<()> {
     radix_ec_fft_dist(
         workspace,
@@ -24,7 +24,7 @@ pub fn radix_ec_fft(
 
 #[auto_workspace]
 pub fn radix_ec_fft_dist(
-    workspace: &ActiveWorkspace, input: &mut Vec<Curve>, omegas: &[Scalar],
+    workspace: &ActiveWorkspace, input: &mut [Curve], omegas: &[Scalar],
     g: Scalar, c: Scalar, after: bool,
 ) -> CudaResult<()> {
     radix_fft(workspace, input, omegas, g, c, after, Affine::name(), false)
@@ -32,7 +32,7 @@ pub fn radix_ec_fft_dist(
 
 #[auto_workspace]
 pub fn radix_scalar_fft(
-    workspace: &ActiveWorkspace, input: &mut Vec<Scalar>, omegas: &[Scalar],
+    workspace: &ActiveWorkspace, input: &mut [Scalar], omegas: &[Scalar],
 ) -> CudaResult<()> {
     radix_scalar_fft_dist(
         workspace,
@@ -46,15 +46,16 @@ pub fn radix_scalar_fft(
 
 #[auto_workspace]
 pub fn radix_scalar_fft_dist(
-    workspace: &ActiveWorkspace, input: &mut Vec<Scalar>, omegas: &[Scalar],
+    workspace: &ActiveWorkspace, input: &mut [Scalar], omegas: &[Scalar],
     g: Scalar, c: Scalar, after: bool,
 ) -> CudaResult<()> {
     radix_fft(workspace, input, omegas, g, c, after, Scalar::name(), true)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn radix_fft<T: Zero + Clone + Copy>(
-    workspace: &ActiveWorkspace, input: &mut Vec<T>, omegas: &[Scalar],
-    g: Scalar, c: Scalar, after: bool, name: String, twiddle_list: bool,
+    workspace: &ActiveWorkspace, input: &mut [T], omegas: &[Scalar], g: Scalar,
+    c: Scalar, after: bool, name: String, twiddle_list: bool,
 ) -> CudaResult<()> {
     const MAX_LOG2_RADIX: u32 = 8;
 
@@ -135,13 +136,12 @@ fn radix_fft<T: Zero + Clone + Copy>(
         // small local_network_size will undermine the performance. So we
         // allocate a larger local_network_size, but translate the global
         // parameter before execution.
-        let physical_local_work_size = if virtual_local_work_size >= 32 {
-            virtual_local_work_size
-        } else if n <= 64 {
-            virtual_local_work_size
-        } else {
-            32
-        };
+        let physical_local_work_size =
+            if virtual_local_work_size >= 32 || n <= 64 {
+                virtual_local_work_size
+            } else {
+                32
+            };
         let global_work_size = n / 2 / physical_local_work_size;
 
         let config = KernelConfig {
@@ -158,8 +158,8 @@ fn radix_fft<T: Zero + Clone + Copy>(
             .func(&kernel_name)?
             .dev_arg(&input_gpu)?
             .dev_arg(&output_gpu)?
-            .in_ref_slice(&twiddle[..])?
-            .in_ref_slice(&omegas[..])?
+            .in_ref_slice(&twiddle)?
+            .in_ref_slice(omegas)?
             .empty()?
             .val(n)?
             .val(log_p)?
@@ -201,7 +201,7 @@ fn radix_fft<T: Zero + Clone + Copy>(
 mod tests {
     use crate::pairing_suite::Scalar;
     use ark_ff::{FftField, Field};
-    use ark_poly::{ EvaluationDomain, Radix2EvaluationDomain};
+    use ark_poly::{EvaluationDomain, Radix2EvaluationDomain};
     use ark_std::{rand::thread_rng, Zero};
 
     use super::*;
