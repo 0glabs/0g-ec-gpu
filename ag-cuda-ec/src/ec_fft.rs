@@ -10,7 +10,7 @@ use crate::{GLOBAL, LOCAL};
 
 #[auto_workspace]
 pub fn radix_ec_fft(
-    workspace: &ActiveWorkspace, input: &mut Vec<Curve>, omegas: &[Scalar],
+    workspace: &ActiveWorkspace, input: &mut [Curve], omegas: &[Scalar],
 ) -> CudaResult<()> {
     const MAX_LOG2_RADIX: u32 = 8;
 
@@ -47,9 +47,7 @@ pub fn radix_ec_fft(
         // small local_network_size will undermine the performance. So we
         // allocate a larger local_network_size, but translate the global
         // parameter before execution.
-        let physical_local_work_size = if virtual_local_work_size >= 32 {
-            virtual_local_work_size
-        } else if n <= 64 {
+        let physical_local_work_size = if virtual_local_work_size >= 32 || n <= 64 {
             virtual_local_work_size
         } else {
             32
@@ -71,7 +69,7 @@ pub fn radix_ec_fft(
             .dev_arg(&input_gpu)?
             .dev_arg(&output_gpu)?
             .in_ref(&twiddle)?
-            .in_ref_slice(&omegas[..])?
+            .in_ref_slice(omegas)?
             .empty()?
             .val(n)?
             .val(log_p)?

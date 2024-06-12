@@ -23,6 +23,7 @@ impl PartialEq for dyn NameAndSource {
 impl Eq for dyn NameAndSource {}
 
 impl PartialOrd for dyn NameAndSource {
+    #[allow(clippy::non_canonical_partial_ord_impl)]
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.name().partial_cmp(&other.name())
     }

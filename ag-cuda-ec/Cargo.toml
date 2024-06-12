@@ -36,6 +36,7 @@ ark-bn254 = "0.4"
 default = ["bn254"]
 bn254 = ["ark-bn254"]
 bls12-381 = ["ark-bls12-381"]
+exclusive = ["bn254", "bls12-381"]
 
 [[bench]]
 name = "ec_fft"
