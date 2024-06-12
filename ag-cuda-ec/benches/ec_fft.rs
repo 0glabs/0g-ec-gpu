@@ -1,5 +1,5 @@
 use ag_cuda_ec::{
-    ec_fft::*,
+    fft::*,
     init_global_workspace, init_local_workspace,
     pairing_suite::{Affine, Scalar},
     test_tools::random_input,

@@ -8,6 +8,24 @@ use rustacuda::error::CudaResult;
 use crate::{GLOBAL, LOCAL};
 
 #[auto_workspace]
+pub fn multiexp(
+    workspace: &ActiveWorkspace, bases: &[Affine],
+    exponents: &[<Scalar as PrimeFieldRepr>::Repr], num_chunks: usize,
+    window_size: usize, neg_is_cheap: bool,
+) -> CudaResult<Vec<Curve>> {
+    assert_eq!(bases.len(), exponents.len());
+    let device = upload_multiexp_bases(workspace, bases)?;
+    multiple_multiexp(
+        workspace,
+        &device,
+        exponents,
+        num_chunks,
+        window_size,
+        neg_is_cheap,
+    )
+}
+
+#[auto_workspace]
 pub fn upload_multiexp_bases(
     workspace: &ActiveWorkspace, bases: &[Affine],
 ) -> CudaResult<DeviceData> {

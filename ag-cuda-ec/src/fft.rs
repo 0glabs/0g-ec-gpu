@@ -12,17 +12,40 @@ use crate::{GLOBAL, LOCAL};
 pub fn radix_ec_fft(
     workspace: &ActiveWorkspace, input: &mut Vec<Curve>, omegas: &[Scalar],
 ) -> CudaResult<()> {
+    radix_fft(workspace, input, omegas, Affine::name(), false)
+}
+
+#[auto_workspace]
+pub fn radix_scalar_fft(
+    workspace: &ActiveWorkspace, input: &mut Vec<Scalar>, omegas: &[Scalar],
+) -> CudaResult<()> {
+    radix_fft(workspace, input, omegas, Scalar::name(), true)
+}
+
+fn radix_fft<T: Zero + Clone + Copy>(
+    workspace: &ActiveWorkspace, input: &mut Vec<T>, omegas: &[Scalar],
+    name: String, twiddle_list: bool,
+) -> CudaResult<()> {
     const MAX_LOG2_RADIX: u32 = 8;
 
     let n = input.len();
     let log_n = n.ilog2();
     assert_eq!(n, 1 << log_n);
 
-    let mut output = vec![Curve::zero(); n];
+    let mut output = vec![T::zero(); n];
 
     let max_deg = std::cmp::min(MAX_LOG2_RADIX, log_n);
 
-    let twiddle = omegas[0].pow([(n >> max_deg) as u64]);
+    // let twiddle = omegas[0].pow([(n >> max_deg) as u64]);
+
+    let twiddle = {
+        let p = omegas[(log_n - max_deg) as usize];
+        if !twiddle_list {
+            vec![p]
+        } else {
+            (0..(1 << (max_deg - 1))).map(|i| p.pow([i])).collect()
+        }
+    };
 
     let mut input_gpu = DeviceParam::new(input)?;
     let mut output_gpu = DeviceParam::new(&mut output)?;
@@ -59,18 +82,18 @@ pub fn radix_ec_fft(
         let config = KernelConfig {
             global_work_size: global_work_size as usize,
             local_work_size: physical_local_work_size as usize,
-            shared_mem: std::mem::size_of::<Curve>()
+            shared_mem: std::mem::size_of::<T>()
                 * 2
                 * physical_local_work_size as usize,
         };
 
-        let kernel_name = format!("{}_radix_fft", Affine::name());
+        let kernel_name = format!("{}_radix_fft", name);
 
         kernel = kernel
             .func(&kernel_name)?
             .dev_arg(&input_gpu)?
             .dev_arg(&output_gpu)?
-            .in_ref(&twiddle)?
+            .in_ref_slice(&twiddle[..])?
             .in_ref_slice(&omegas[..])?
             .empty()?
             .val(n)?
@@ -80,7 +103,6 @@ pub fn radix_ec_fft(
             .val(max_deg)?
             .launch(config)?
             .complete()?;
-
 
         log_p += deg;
         DeviceParam::swap_device_pointer(&mut input_gpu, &mut output_gpu);
@@ -127,6 +149,41 @@ mod tests {
                 Radix2EvaluationDomain::<Scalar>::new(v2_coeffs.len()).unwrap();
 
             v2_coeffs = fft_domain.fft(&v2_coeffs);
+
+            if v1_coeffs != v2_coeffs {
+                panic!("wrong answer");
+            }
+        }
+    }
+
+    #[test]
+    fn test_scalar_fft() {
+        let mut rng = thread_rng();
+
+        for degree in 4..8 {
+            let n = 1 << degree;
+
+            println!("Testing FFT for {} elements...", n);
+
+            let mut omegas = vec![Scalar::zero(); 32];
+            omegas[0] = Scalar::get_root_of_unity(n as u64).unwrap();
+            for i in 1..32 {
+                omegas[i] = omegas[i - 1].square();
+            }
+
+            let mut v1_coeffs = random_input(n, &mut rng);
+            let mut v2_coeffs = v1_coeffs.clone();
+
+            // Evaluate with GPU
+            radix_scalar_fft_mt(&mut v1_coeffs, &omegas[..]).unwrap();
+
+            // Evaluate with CPU
+            let fft_domain =
+                Radix2EvaluationDomain::<Scalar>::new(v2_coeffs.len()).unwrap();
+
+            v2_coeffs = fft_domain.fft(&v2_coeffs);
+            // dbg!(&v1_coeffs);
+            // dbg!(&v2_coeffs);
 
             if v1_coeffs != v2_coeffs {
                 panic!("wrong answer");
