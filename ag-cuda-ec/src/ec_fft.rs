@@ -47,11 +47,12 @@ pub fn radix_ec_fft(
         // small local_network_size will undermine the performance. So we
         // allocate a larger local_network_size, but translate the global
         // parameter before execution.
-        let physical_local_work_size = if virtual_local_work_size >= 32 || n <= 64 {
-            virtual_local_work_size
-        } else {
-            32
-        };
+        let physical_local_work_size =
+            if virtual_local_work_size >= 32 || n <= 64 {
+                virtual_local_work_size
+            } else {
+                32
+            };
         let global_work_size = n / 2 / physical_local_work_size;
 
         let config = KernelConfig {
