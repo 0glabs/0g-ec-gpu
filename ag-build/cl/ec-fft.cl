@@ -74,3 +74,29 @@ KERNEL void POINT_radix_fft(GLOBAL POINT_jacobian* x, // Source buffer
     y[(i+counth)*p] = u[bitreverse(i + counth, deg)];
   }
 }
+
+/// Multiplies all of the elements by `g ^ i * c`
+KERNEL void POINT_mul_by_field(GLOBAL POINT_jacobian* elements,
+                        uint n,
+                        SCALAR g,
+                        SCALAR c,
+                        uint flags
+                        ) {
+  const uint gid = GET_GLOBAL_ID();
+  if (gid >= n) {
+    return;
+  }
+  SCALAR field = c;
+
+  bool g_is_one = (flags & 0x2) == 0;
+  bool c_is_one = (flags & 0x1) == 0;
+  
+  if (!g_is_one && !c_is_one) {
+    field = SCALAR_mul(SCALAR_pow(g, gid), c);
+  } else if (!g_is_one) {
+    // c == one
+    field = SCALAR_pow(g, gid);
+  }
+  
+  elements[gid] = POINT_mul(elements[gid], field);
+}

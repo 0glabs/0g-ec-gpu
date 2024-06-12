@@ -3,7 +3,7 @@ use ag_cuda_proxy::{ActiveWorkspace, DeviceParam, KernelConfig};
 use ag_cuda_workspace_macro::auto_workspace;
 use ag_types::GpuName;
 use ark_ff::Field;
-use ark_std::Zero;
+use ark_std::{One, Zero};
 use rustacuda::error::CudaResult;
 
 use crate::{GLOBAL, LOCAL};
@@ -12,21 +12,56 @@ use crate::{GLOBAL, LOCAL};
 pub fn radix_ec_fft(
     workspace: &ActiveWorkspace, input: &mut Vec<Curve>, omegas: &[Scalar],
 ) -> CudaResult<()> {
-    radix_fft(workspace, input, omegas, Affine::name(), false)
+    radix_ec_fft_dist(
+        workspace,
+        input,
+        omegas,
+        Scalar::one(),
+        Scalar::one(),
+        false,
+    )
+}
+
+#[auto_workspace]
+pub fn radix_ec_fft_dist(
+    workspace: &ActiveWorkspace, input: &mut Vec<Curve>, omegas: &[Scalar],
+    g: Scalar, c: Scalar, after: bool,
+) -> CudaResult<()> {
+    radix_fft(workspace, input, omegas, g, c, after, Affine::name(), false)
 }
 
 #[auto_workspace]
 pub fn radix_scalar_fft(
     workspace: &ActiveWorkspace, input: &mut Vec<Scalar>, omegas: &[Scalar],
 ) -> CudaResult<()> {
-    radix_fft(workspace, input, omegas, Scalar::name(), true)
+    radix_scalar_fft_dist(
+        workspace,
+        input,
+        omegas,
+        Scalar::one(),
+        Scalar::one(),
+        false,
+    )
+}
+
+#[auto_workspace]
+pub fn radix_scalar_fft_dist(
+    workspace: &ActiveWorkspace, input: &mut Vec<Scalar>, omegas: &[Scalar],
+    g: Scalar, c: Scalar, after: bool,
+) -> CudaResult<()> {
+    radix_fft(workspace, input, omegas, g, c, after, Scalar::name(), true)
 }
 
 fn radix_fft<T: Zero + Clone + Copy>(
     workspace: &ActiveWorkspace, input: &mut Vec<T>, omegas: &[Scalar],
-    name: String, twiddle_list: bool,
+    g: Scalar, c: Scalar, after: bool, name: String, twiddle_list: bool,
 ) -> CudaResult<()> {
     const MAX_LOG2_RADIX: u32 = 8;
+
+    if g.is_zero() || c.is_zero() {
+        input.iter_mut().for_each(|x| *x = T::zero());
+        return Ok(());
+    }
 
     let n = input.len();
     let log_n = n.ilog2();
@@ -54,6 +89,36 @@ fn radix_fft<T: Zero + Clone + Copy>(
     input_gpu.to_device(&stream)?;
 
     let mut kernel = workspace.create_kernel()?;
+
+    let gc_flag = {
+        let mut ans = 0;
+        if !g.is_one() {
+            ans |= 0x2;
+        }
+        if !c.is_one() {
+            ans |= 0x1;
+        }
+        ans
+    };
+
+    if gc_flag != 0 && !after {
+        let local_work_size = std::cmp::min(64, n);
+        let global_work_size = n / local_work_size;
+        let config = KernelConfig {
+            global_work_size,
+            local_work_size,
+            shared_mem: 0,
+        };
+        kernel = kernel
+            .func(&format!("{}_mul_by_field", name))?
+            .dev_arg(&input_gpu)?
+            .val(n)?
+            .val(g)?
+            .val(c)?
+            .val(gc_flag)?
+            .launch(config)?
+            .complete()?;
+    }
 
     // Specifies log2 of `p`, (http://www.bealto.com/gpu-fft_group-1.html)
     let mut log_p = 0u32;
@@ -108,6 +173,25 @@ fn radix_fft<T: Zero + Clone + Copy>(
         DeviceParam::swap_device_pointer(&mut input_gpu, &mut output_gpu);
     }
 
+    if gc_flag != 0 && after {
+        let local_work_size = std::cmp::min(64, n);
+        let global_work_size = n / local_work_size;
+        let config = KernelConfig {
+            global_work_size,
+            local_work_size,
+            shared_mem: 0,
+        };
+        kernel
+            .func(&format!("{}_mul_by_field", name))?
+            .dev_arg(&input_gpu)?
+            .val(n)?
+            .val(g)?
+            .val(c)?
+            .val(gc_flag)?
+            .launch(config)?
+            .complete()?;
+    }
+
     input_gpu.to_host(&stream)?;
 
     Ok(())
@@ -117,7 +201,7 @@ fn radix_fft<T: Zero + Clone + Copy>(
 mod tests {
     use crate::pairing_suite::Scalar;
     use ark_ff::{FftField, Field};
-    use ark_poly::{EvaluationDomain, Radix2EvaluationDomain};
+    use ark_poly::{ EvaluationDomain, Radix2EvaluationDomain};
     use ark_std::{rand::thread_rng, Zero};
 
     use super::*;
@@ -184,6 +268,184 @@ mod tests {
             v2_coeffs = fft_domain.fft(&v2_coeffs);
             // dbg!(&v1_coeffs);
             // dbg!(&v2_coeffs);
+
+            if v1_coeffs != v2_coeffs {
+                panic!("wrong answer");
+            }
+        }
+    }
+
+    #[test]
+    fn test_scalar_ifft() {
+        let mut rng = thread_rng();
+
+        for degree in 4..8 {
+            let n = 1 << degree;
+
+            println!("Testing FFT for {} elements...", n);
+
+            let mut omegas = vec![Scalar::zero(); 32];
+            omegas[0] = Scalar::get_root_of_unity(n as u64)
+                .unwrap()
+                .inverse()
+                .unwrap();
+            for i in 1..32 {
+                omegas[i] = omegas[i - 1].square();
+            }
+
+            let mut v1_coeffs = random_input(n, &mut rng);
+            let mut v2_coeffs = v1_coeffs.clone();
+
+            // Evaluate with CPU
+            let fft_domain =
+                Radix2EvaluationDomain::<Scalar>::new(v2_coeffs.len()).unwrap();
+
+            // Evaluate with GPU
+            radix_scalar_fft_dist_mt(
+                &mut v1_coeffs,
+                &omegas[..],
+                Scalar::one(),
+                fft_domain.size_inv,
+                true,
+            )
+            .unwrap();
+
+            v2_coeffs = fft_domain.ifft(&v2_coeffs);
+
+            if v1_coeffs != v2_coeffs {
+                panic!("wrong answer");
+            }
+        }
+    }
+
+    #[test]
+    fn test_scalar_fft_coset() {
+        let mut rng = thread_rng();
+
+        for degree in 4..8 {
+            let n = 1 << degree;
+
+            println!("Testing FFT for {} elements...", n);
+
+            let mut omegas = vec![Scalar::zero(); 32];
+            omegas[0] = Scalar::get_root_of_unity(n as u64).unwrap();
+            for i in 1..32 {
+                omegas[i] = omegas[i - 1].square();
+            }
+
+            let mut v1_coeffs = random_input(n, &mut rng);
+            let mut v2_coeffs = v1_coeffs.clone();
+
+            // Evaluate with CPU
+            let fft_domain =
+                Radix2EvaluationDomain::<Scalar>::new(v2_coeffs.len())
+                    .unwrap()
+                    .get_coset(Scalar::from(4u64))
+                    .unwrap();
+
+            // Evaluate with GPU
+            radix_scalar_fft_dist_mt(
+                &mut v1_coeffs,
+                &omegas[..],
+                Scalar::from(4u64),
+                Scalar::one(),
+                false,
+            )
+            .unwrap();
+
+            v2_coeffs = fft_domain.fft(&v2_coeffs);
+
+            if v1_coeffs != v2_coeffs {
+                panic!("wrong answer");
+            }
+        }
+    }
+
+    #[test]
+    fn test_scalar_ifft_coset() {
+        let mut rng = thread_rng();
+
+        for degree in 4..8 {
+            let n = 1 << degree;
+
+            println!("Testing FFT for {} elements...", n);
+
+            let mut omegas = vec![Scalar::zero(); 32];
+            omegas[0] = Scalar::get_root_of_unity(n as u64)
+                .unwrap()
+                .inverse()
+                .unwrap();
+            for i in 1..32 {
+                omegas[i] = omegas[i - 1].square();
+            }
+
+            let mut v1_coeffs = random_input(n, &mut rng);
+            let mut v2_coeffs = v1_coeffs.clone();
+
+            // Evaluate with CPU
+            let fft_domain =
+                Radix2EvaluationDomain::<Scalar>::new(v2_coeffs.len())
+                    .unwrap()
+                    .get_coset(Scalar::from(4u64))
+                    .unwrap();
+
+            // Evaluate with GPU
+            radix_scalar_fft_dist_mt(
+                &mut v1_coeffs,
+                &omegas[..],
+                Scalar::from(4u64).inverse().unwrap(),
+                fft_domain.size_inv,
+                true,
+            )
+            .unwrap();
+
+            v2_coeffs = fft_domain.ifft(&v2_coeffs);
+
+            if v1_coeffs != v2_coeffs {
+                panic!("wrong answer");
+            }
+        }
+    }
+
+    #[test]
+    fn test_ec_ifft_coset() {
+        let mut rng = thread_rng();
+
+        for degree in 4..8 {
+            let n = 1 << degree;
+
+            println!("Testing FFT for {} elements...", n);
+
+            let mut omegas = vec![Scalar::zero(); 32];
+            omegas[0] = Scalar::get_root_of_unity(n as u64)
+                .unwrap()
+                .inverse()
+                .unwrap();
+            for i in 1..32 {
+                omegas[i] = omegas[i - 1].square();
+            }
+
+            let mut v1_coeffs = random_input(n, &mut rng);
+            let mut v2_coeffs = v1_coeffs.clone();
+
+            // Evaluate with CPU
+            let fft_domain =
+                Radix2EvaluationDomain::<Scalar>::new(v2_coeffs.len())
+                    .unwrap()
+                    .get_coset(Scalar::from(4u64))
+                    .unwrap();
+
+            // Evaluate with GPU
+            radix_ec_fft_dist_mt(
+                &mut v1_coeffs,
+                &omegas[..],
+                Scalar::from(4u64).inverse().unwrap(),
+                fft_domain.size_inv,
+                true,
+            )
+            .unwrap();
+
+            v2_coeffs = fft_domain.ifft(&v2_coeffs);
 
             if v1_coeffs != v2_coeffs {
                 panic!("wrong answer");
