@@ -19,6 +19,29 @@ pub fn auto_workspace(_attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     let fn_name = &input_fn.sig.ident;
+    let generics = &input_fn.sig.generics;
+    let generic_args_call = if generics.params.is_empty() {
+        quote! {}
+    } else {
+        let generic_args = generics
+            .params
+            .iter()
+            .map(|x| match x {
+                syn::GenericParam::Lifetime(syn::LifetimeParam {
+                    lifetime,
+                    ..
+                }) => quote! {#lifetime },
+                syn::GenericParam::Type(syn::TypeParam { ident, .. }) => {
+                    quote! { #ident}
+                }
+                syn::GenericParam::Const(syn::ConstParam { ident, .. }) => {
+                    quote! { #ident}
+                }
+            })
+            .collect::<Vec<_>>();
+
+        quote! { :: <#(#generic_args),*> }
+    };
     let st_fn_name = Ident::new(&format!("{}_st", fn_name), fn_name.span());
     let mt_fn_name = Ident::new(&format!("{}_mt", fn_name), fn_name.span());
 
@@ -38,16 +61,16 @@ pub fn auto_workspace(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let output_fn = quote! {
         #input_fn
 
-        pub fn #mt_fn_name(#(#fn_args),*) #fn_return_type {
-            LOCAL.with(|x| #fn_return_type {
-                let workspace = x.activate()?;
-                #fn_name(&workspace, #(#fn_args_names),*)
+        pub fn #mt_fn_name #generics (#(#fn_args),*) #fn_return_type {
+            LOCAL.with(|auto_workspace_macro_inner__| #fn_return_type {
+                let workspace = auto_workspace_macro_inner__.activate()?;
+                #fn_name #generic_args_call (&workspace, #(#fn_args_names),*)
             })
         }
 
-        pub fn #st_fn_name(#(#fn_args),*) #fn_return_type {
+        pub fn #st_fn_name #generics (#(#fn_args),*) #fn_return_type {
             let workspace = GLOBAL.activate()?;
-            #fn_name(&workspace, #(#fn_args_names),*)
+            #fn_name #generic_args_call (&workspace, #(#fn_args_names),*)
         }
     };
 

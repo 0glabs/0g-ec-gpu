@@ -11,9 +11,9 @@ rustacuda = { workspace = true }
 ag-types = { workspace = true }
 ag-cuda-workspace-macro = { workspace = true }
 
-ark-ec = "0.4.2"
-ark-ff = "0.4.2"
-ark-std = { version = "0.4.0", features = ["getrandom"] }
+ark-ec = "0.4"
+ark-ff = "0.4"
+ark-std = { version = "0.4", features = ["getrandom"] }
 
 ark-bls12-381 = { version = "0.4", optional = true }
 ark-bn254 = { version = "0.4", optional = true }
@@ -22,8 +22,8 @@ ark-bn254 = { version = "0.4", optional = true }
 once_cell = "1.19"
 
 [dev-dependencies]
-ark-poly = { version = "0.4.0", features = ["parallel"] }
-ark-ec = { version = "0.4.2", features = ["parallel"] }
+ark-poly = { version = "0.4", features = ["parallel"] }
+ark-ec = { version = "0.4", features = ["parallel"] }
 rayon = "1.10"
 
 
@@ -36,7 +36,6 @@ ark-bn254 = "0.4"
 default = ["bn254"]
 bn254 = ["ark-bn254"]
 bls12-381 = ["ark-bls12-381"]
-exclusive = ["bn254", "bls12-381"]
 
 [[bench]]
 name = "ec_fft"

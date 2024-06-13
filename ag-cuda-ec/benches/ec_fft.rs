@@ -1,7 +1,7 @@
 use ag_cuda_ec::{
-    ec_fft::*,
+    fft::*,
     init_global_workspace, init_local_workspace,
-    pairing_suite::{Affine, Scalar},
+    pairing_suite::{Affine, Curve, Scalar},
     test_tools::random_input,
 };
 use ark_ec::AffineRepr;
@@ -21,33 +21,33 @@ fn bench_ec_fft_sequential() {
     let mut rng = thread_rng();
     init_global_workspace();
 
-    for degree in 0..12usize {
+    for degree in 8..12usize {
         let n: usize = 1 << degree;
 
         println!("Testing FFTg for {} elements...", n);
 
-        let mut omegas = vec![Scalar::zero(); 32];
-        omegas[0] = Scalar::get_root_of_unity(n as u64).unwrap();
-        for i in 1..32 {
-            omegas[i] = omegas[i - 1].square();
-        }
-
         let mut v1_coeffs = random_input(n, &mut rng);
         let mut v2_coeffs = v1_coeffs.clone();
-
-        // Evaluate with GPU
-        let now = Instant::now();
-        radix_ec_fft_st(&mut v1_coeffs, &omegas[..]).unwrap();
-        let gpu_dur = now.elapsed().as_millis();
-        println!("GPU took {}ms.", gpu_dur);
 
         // Evaluate with CPU
         let fft_domain =
             Radix2EvaluationDomain::<Scalar>::new(v2_coeffs.len()).unwrap();
         let now = Instant::now();
-        fft_domain.fft_in_place(&mut v2_coeffs);
+        fft_domain.ifft_in_place(&mut v2_coeffs);
         let cpu_dur = now.elapsed().as_millis();
         println!("CPU took {}ms.", cpu_dur);
+
+        let mut omegas = vec![Scalar::zero(); 32];
+        omegas[0] = fft_domain.group_gen_inv;
+        for i in 1..32 {
+            omegas[i] = omegas[i - 1].square();
+        }
+
+        // Evaluate with GPU
+        let now = Instant::now();
+        radix_fft_st::<Curve>(&mut v1_coeffs, &omegas[..], None).unwrap();
+        let gpu_dur = now.elapsed().as_millis();
+        println!("GPU took {}ms.", gpu_dur);
 
         // Evaluate with CPU
         println!("Speedup: x{}", cpu_dur as f32 / gpu_dur as f32);
@@ -84,7 +84,7 @@ fn bench_ec_fft_parallel() {
 
         let now = Instant::now();
         // Evaluate with GPU
-        radix_ec_fft_mt(&mut v1_coeffs, &omegas[..]).unwrap();
+        radix_fft_mt(&mut v1_coeffs, &omegas[..], None).unwrap();
         let gpu_dur = now.elapsed().as_millis();
         println!("GPU took {}ms.", gpu_dur);
 
@@ -96,7 +96,7 @@ fn bench_ec_fft_parallel() {
 
         let now = Instant::now();
         // Evaluate with GPU
-        radix_ec_fft_mt(&mut v1_coeffs, &omegas2[..]).unwrap();
+        radix_fft_mt(&mut v1_coeffs, &omegas2[..], None).unwrap();
         let gpu_dur = now.elapsed().as_millis();
         println!("GPU took {}ms.", gpu_dur);
 

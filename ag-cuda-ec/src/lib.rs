@@ -1,4 +1,4 @@
-pub mod ec_fft;
+pub mod fft;
 pub mod multiexp;
 pub mod pairing_suite;
 pub mod test_tools;
