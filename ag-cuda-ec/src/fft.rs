@@ -1,30 +1,40 @@
-use crate::pairing_suite::{Affine, Curve, Scalar};
+#[allow(unused)]
+use crate::pairing_suite::{
+    Affine, Affine2, Curve, G1Config, G2Config, Scalar,
+};
 use ag_cuda_proxy::{ActiveWorkspace, DeviceParam, KernelConfig};
 use ag_cuda_workspace_macro::auto_workspace;
-use ag_types::GpuName;
 use ark_ff::Field;
 use ark_std::{One, Zero};
 use rustacuda::error::CudaResult;
 
 use crate::{GLOBAL, LOCAL};
 
-pub trait GpuFftElem: Zero + Clone + Copy {
+pub trait GpuFftField: Zero + Clone + Copy {
     const TWIDDLE_LIST: bool;
     fn name() -> String;
 }
-impl GpuFftElem for Scalar {
+#[cfg(feature = "fr-fft")]
+impl GpuFftField for Scalar {
     const TWIDDLE_LIST: bool = true;
 
-    fn name() -> String { <Scalar as GpuName>::name() }
+    fn name() -> String { <Scalar as ag_types::GpuName>::name() }
 }
-impl GpuFftElem for Curve {
+#[cfg(feature = "g1-fft")]
+impl GpuFftField for ark_ec::short_weierstrass::Projective<G1Config> {
     const TWIDDLE_LIST: bool = false;
 
-    fn name() -> String { <Affine as GpuName>::name() }
+    fn name() -> String { <Affine as ag_types::GpuName>::name() }
+}
+#[cfg(feature = "g2-fft")]
+impl GpuFftField for ark_ec::short_weierstrass::Projective<G2Config> {
+    const TWIDDLE_LIST: bool = false;
+
+    fn name() -> String { <Affine2 as ag_types::GpuName>::name() }
 }
 
 #[auto_workspace]
-pub fn radix_fft<T: GpuFftElem>(
+pub fn radix_fft<T: GpuFftField>(
     workspace: &ActiveWorkspace, input: &mut [T], omegas: &[Scalar],
     offset: Option<Scalar>,
 ) -> CudaResult<()> {
@@ -33,7 +43,7 @@ pub fn radix_fft<T: GpuFftElem>(
 }
 
 #[auto_workspace]
-pub fn radix_ifft<T: GpuFftElem>(
+pub fn radix_ifft<T: GpuFftField>(
     workspace: &ActiveWorkspace, input: &mut [T], omegas: &[Scalar],
     offset_inv: Option<Scalar>, size_inv: Scalar,
 ) -> CudaResult<()> {
@@ -41,7 +51,7 @@ pub fn radix_ifft<T: GpuFftElem>(
     radix_fft_inner(workspace, input, omegas, offset, size_inv, true)
 }
 
-fn radix_fft_inner<T: GpuFftElem>(
+fn radix_fft_inner<T: GpuFftField>(
     workspace: &ActiveWorkspace, input: &mut [T], omegas: &[Scalar], g: Scalar,
     c: Scalar, after: bool,
 ) -> CudaResult<()> {
@@ -187,40 +197,64 @@ fn radix_fft_inner<T: GpuFftElem>(
 
 #[cfg(test)]
 mod tests {
-    use crate::pairing_suite::Scalar;
+    #![allow(unused)]
+
+    use core::prelude::v1;
+    use std::any::Any;
+
+    use crate::pairing_suite::{Curve, Curve2, Scalar};
     use ark_ff::{FftField, Field};
     use ark_poly::{EvaluationDomain, Radix2EvaluationDomain};
-    use ark_std::{rand::thread_rng, Zero};
+    use ark_std::{
+        rand::{
+            distributions::{Distribution, Standard},
+            thread_rng,
+        },
+        Zero,
+    };
+    use once_cell::sync::Lazy;
 
     use super::*;
     use crate::test_tools::random_input;
 
-    #[test]
-    fn test_ec_fft() {
-        let mut rng = thread_rng();
+    fn omegas(n: usize) -> [Scalar; 32] {
+        let mut omegas = [Scalar::zero(); 32];
+        omegas[0] = Scalar::get_root_of_unity(n as u64).unwrap();
+        for i in 1..32 {
+            omegas[i] = omegas[i - 1].square();
+        }
+        omegas
+    }
 
+    fn omegas_inv(n: usize) -> [Scalar; 32] {
+        let mut omegas = [Scalar::zero(); 32];
+        omegas[0] = Scalar::get_root_of_unity(n as u64)
+            .unwrap()
+            .inverse()
+            .unwrap();
+        for i in 1..32 {
+            omegas[i] = omegas[i - 1].square();
+        }
+        omegas
+    }
+
+    fn test_fft_inner<T: GpuFftField + Any + Eq>(
+        gpu: impl Fn(&mut [T]), cpu: impl Fn(&[T]) -> Vec<T>,
+    ) where Standard: Distribution<T> {
+        let mut rng = thread_rng();
         for degree in 4..8 {
             let n = 1 << degree;
-
-            println!("Testing FFTg for {} elements...", n);
-
-            let mut omegas = vec![Scalar::zero(); 32];
-            omegas[0] = Scalar::get_root_of_unity(n as u64).unwrap();
-            for i in 1..32 {
-                omegas[i] = omegas[i - 1].square();
-            }
+            println!(
+                "Testing FFT for {} elements type {}",
+                n,
+                std::any::type_name::<T>()
+            );
 
             let mut v1_coeffs = random_input(n, &mut rng);
             let mut v2_coeffs = v1_coeffs.clone();
 
-            // Evaluate with GPU
-            radix_fft_mt::<Curve>(&mut v1_coeffs, &omegas[..], None).unwrap();
-
-            // Evaluate with CPU
-            let fft_domain =
-                Radix2EvaluationDomain::<Scalar>::new(v2_coeffs.len()).unwrap();
-
-            v2_coeffs = fft_domain.fft(&v2_coeffs);
+            gpu(&mut v1_coeffs);
+            let v2_coeffs = cpu(&mut v2_coeffs);
 
             if v1_coeffs != v2_coeffs {
                 panic!("wrong answer");
@@ -228,211 +262,128 @@ mod tests {
         }
     }
 
+    type Domain = Radix2EvaluationDomain<Scalar>;
+
+    #[cfg(feature = "fr-fft")]
     #[test]
     fn test_scalar_fft() {
-        let mut rng = thread_rng();
-
-        for degree in 4..8 {
-            let n = 1 << degree;
-
-            println!("Testing FFT for {} elements...", n);
-
-            let mut omegas = vec![Scalar::zero(); 32];
-            omegas[0] = Scalar::get_root_of_unity(n as u64).unwrap();
-            for i in 1..32 {
-                omegas[i] = omegas[i - 1].square();
-            }
-
-            let mut v1_coeffs = random_input(n, &mut rng);
-            let mut v2_coeffs = v1_coeffs.clone();
-
-            // Evaluate with GPU
-            radix_fft_mt::<Scalar>(&mut v1_coeffs, &omegas[..], None).unwrap();
-
-            // Evaluate with CPU
-            let fft_domain =
-                Radix2EvaluationDomain::<Scalar>::new(v2_coeffs.len()).unwrap();
-
-            v2_coeffs = fft_domain.fft(&v2_coeffs);
-            // dbg!(&v1_coeffs);
-            // dbg!(&v2_coeffs);
-
-            if v1_coeffs != v2_coeffs {
-                panic!("wrong answer");
-            }
-        }
+        test_fft_inner(
+            |v| radix_fft_mt::<Scalar>(v, &omegas(v.len()), None).unwrap(),
+            |v| Domain::new(v.len()).unwrap().fft(&v),
+        );
     }
 
+    #[cfg(feature = "fr-fft")]
     #[test]
     fn test_scalar_ifft() {
-        let mut rng = thread_rng();
-
-        for degree in 4..8 {
-            let n = 1 << degree;
-
-            println!("Testing FFT for {} elements...", n);
-
-            let mut omegas = vec![Scalar::zero(); 32];
-            omegas[0] = Scalar::get_root_of_unity(n as u64)
+        let domain = |n| Domain::new(n).unwrap();
+        test_fft_inner(
+            |v| {
+                radix_ifft_mt::<Scalar>(
+                    v,
+                    &omegas_inv(v.len()),
+                    None,
+                    domain(v.len()).size_inv,
+                )
                 .unwrap()
-                .inverse()
-                .unwrap();
-            for i in 1..32 {
-                omegas[i] = omegas[i - 1].square();
-            }
-
-            let mut v1_coeffs = random_input(n, &mut rng);
-            let mut v2_coeffs = v1_coeffs.clone();
-
-            // Evaluate with CPU
-            let fft_domain =
-                Radix2EvaluationDomain::<Scalar>::new(v2_coeffs.len()).unwrap();
-
-            // Evaluate with GPU
-            radix_ifft_mt::<Scalar>(
-                &mut v1_coeffs,
-                &omegas[..],
-                None,
-                fft_domain.size_inv,
-            )
-            .unwrap();
-
-            v2_coeffs = fft_domain.ifft(&v2_coeffs);
-
-            if v1_coeffs != v2_coeffs {
-                panic!("wrong answer");
-            }
-        }
+            },
+            |v| domain(v.len()).ifft(&v),
+        );
     }
 
+    #[cfg(feature = "fr-fft")]
     #[test]
     fn test_scalar_fft_coset() {
-        let mut rng = thread_rng();
-
-        for degree in 4..8 {
-            let n = 1 << degree;
-
-            println!("Testing FFT for {} elements...", n);
-
-            let mut omegas = vec![Scalar::zero(); 32];
-            omegas[0] = Scalar::get_root_of_unity(n as u64).unwrap();
-            for i in 1..32 {
-                omegas[i] = omegas[i - 1].square();
-            }
-
-            let mut v1_coeffs = random_input(n, &mut rng);
-            let mut v2_coeffs = v1_coeffs.clone();
-
-            // Evaluate with CPU
-            let fft_domain =
-                Radix2EvaluationDomain::<Scalar>::new(v2_coeffs.len())
-                    .unwrap()
-                    .get_coset(Scalar::from(4u64))
-                    .unwrap();
-
-            // Evaluate with GPU
-            radix_fft_mt::<Scalar>(
-                &mut v1_coeffs,
-                &omegas[..],
-                Some(Scalar::from(4u64)),
-            )
-            .unwrap();
-
-            v2_coeffs = fft_domain.fft(&v2_coeffs);
-
-            if v1_coeffs != v2_coeffs {
-                panic!("wrong answer");
-            }
-        }
+        let domain =
+            |n| Domain::new(n).unwrap().get_coset(Scalar::from(4)).unwrap();
+        test_fft_inner(
+            |v| {
+                radix_fft_mt::<Scalar>(
+                    v,
+                    &omegas(v.len()),
+                    Some(domain(v.len()).coset_offset()),
+                )
+                .unwrap()
+            },
+            |v| domain(v.len()).fft(&v),
+        );
     }
 
+    #[cfg(feature = "fr-fft")]
     #[test]
     fn test_scalar_ifft_coset() {
-        let mut rng = thread_rng();
-
-        for degree in 4..8 {
-            let n = 1 << degree;
-
-            println!("Testing FFT for {} elements...", n);
-
-            let mut omegas = vec![Scalar::zero(); 32];
-            omegas[0] = Scalar::get_root_of_unity(n as u64)
+        let domain =
+            |n| Domain::new(n).unwrap().get_coset(Scalar::from(4)).unwrap();
+        test_fft_inner(
+            |v| {
+                let d = domain(v.len());
+                radix_ifft_mt::<Scalar>(
+                    v,
+                    &omegas_inv(v.len()),
+                    Some(d.coset_offset_inv()),
+                    d.size_inv,
+                )
                 .unwrap()
-                .inverse()
-                .unwrap();
-            for i in 1..32 {
-                omegas[i] = omegas[i - 1].square();
-            }
-
-            let mut v1_coeffs = random_input(n, &mut rng);
-            let mut v2_coeffs = v1_coeffs.clone();
-
-            // Evaluate with CPU
-            let fft_domain =
-                Radix2EvaluationDomain::<Scalar>::new(v2_coeffs.len())
-                    .unwrap()
-                    .get_coset(Scalar::from(4u64))
-                    .unwrap();
-
-            // Evaluate with GPU
-            radix_ifft_mt::<Scalar>(
-                &mut v1_coeffs,
-                &omegas[..],
-                Some(Scalar::from(4u64).inverse().unwrap()),
-                fft_domain.size_inv,
-            )
-            .unwrap();
-
-            v2_coeffs = fft_domain.ifft(&v2_coeffs);
-
-            if v1_coeffs != v2_coeffs {
-                panic!("wrong answer");
-            }
-        }
+            },
+            |v| domain(v.len()).ifft(&v),
+        );
     }
 
+    #[cfg(feature = "g1-fft")]
+    #[test]
+    fn test_ec_fft() {
+        test_fft_inner(
+            |v| radix_fft_mt::<Curve>(v, &omegas(v.len()), None).unwrap(),
+            |v| Domain::new(v.len()).unwrap().fft(&v),
+        );
+    }
+
+    #[cfg(feature = "g1-fft")]
     #[test]
     fn test_ec_ifft_coset() {
-        let mut rng = thread_rng();
-
-        for degree in 4..8 {
-            let n = 1 << degree;
-
-            println!("Testing FFT for {} elements...", n);
-
-            let mut omegas = vec![Scalar::zero(); 32];
-            omegas[0] = Scalar::get_root_of_unity(n as u64)
+        let domain =
+            |n| Domain::new(n).unwrap().get_coset(Scalar::from(4)).unwrap();
+        test_fft_inner(
+            |v| {
+                let d = domain(v.len());
+                radix_ifft_mt::<Curve>(
+                    v,
+                    &omegas_inv(v.len()),
+                    Some(d.coset_offset_inv()),
+                    d.size_inv,
+                )
                 .unwrap()
-                .inverse()
-                .unwrap();
-            for i in 1..32 {
-                omegas[i] = omegas[i - 1].square();
-            }
+            },
+            |v| domain(v.len()).ifft(&v),
+        );
+    }
 
-            let mut v1_coeffs = random_input(n, &mut rng);
-            let mut v2_coeffs = v1_coeffs.clone();
+    #[cfg(feature = "g2-fft")]
+    #[test]
+    fn test_ec_g2_fft() {
+        test_fft_inner(
+            |v| radix_fft_mt::<Curve2>(v, &omegas(v.len()), None).unwrap(),
+            |v| Domain::new(v.len()).unwrap().fft(&v),
+        );
+    }
 
-            // Evaluate with CPU
-            let fft_domain =
-                Radix2EvaluationDomain::<Scalar>::new(v2_coeffs.len())
-                    .unwrap()
-                    .get_coset(Scalar::from(4u64))
-                    .unwrap();
-
-            // Evaluate with GPU
-            radix_ifft_mt::<Curve>(
-                &mut v1_coeffs,
-                &omegas[..],
-                Some(Scalar::from(4u64).inverse().unwrap()),
-                fft_domain.size_inv,
-            )
-            .unwrap();
-
-            v2_coeffs = fft_domain.ifft(&v2_coeffs);
-
-            if v1_coeffs != v2_coeffs {
-                panic!("wrong answer");
-            }
-        }
+    #[cfg(feature = "g2-fft")]
+    #[test]
+    fn test_ec_g2_ifft_coset() {
+        let domain =
+            |n| Domain::new(n).unwrap().get_coset(Scalar::from(4)).unwrap();
+        test_fft_inner(
+            |v| {
+                let d = domain(v.len());
+                radix_ifft_mt::<Curve2>(
+                    v,
+                    &omegas_inv(v.len()),
+                    Some(d.coset_offset_inv()),
+                    d.size_inv,
+                )
+                .unwrap()
+            },
+            |v| domain(v.len()).ifft(&v),
+        );
     }
 }

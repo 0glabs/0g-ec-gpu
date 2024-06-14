@@ -33,9 +33,16 @@ ark-bls12-381 = "0.4"
 ark-bn254 = "0.4"
 
 [features]
-default = ["bn254"]
+default = ["bn254", "all-algo"]
 bn254 = ["ark-bn254"]
 bls12-381 = ["ark-bls12-381"]
+
+all-algo = ["fr-fft", "g1-fft", "g2-fft", "g1-msm", "g2-msm"]
+fr-fft = []
+g1-fft = []
+g2-fft = []
+g1-msm = []
+g2-msm = []
 
 [[bench]]
 name = "ec_fft"
