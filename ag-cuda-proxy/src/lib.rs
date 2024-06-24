@@ -4,7 +4,7 @@ mod kernel;
 mod module;
 mod params;
 
-pub use kernel::KernelConfig;
+pub use kernel::{Kernel, KernelConfig};
 pub use module::{ActiveWorkspace, CudaWorkspace};
 pub use params::{DeviceData, DeviceParam, ParamIO};
 

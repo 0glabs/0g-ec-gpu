@@ -1,5 +1,4 @@
-#[allow(unused)]
-use crate::pairing_suite::{G1Config, G2Config, Scalar};
+use crate::pairing_suite::Scalar;
 use ag_cuda_proxy::{ActiveWorkspace, DeviceData, KernelConfig};
 use ag_cuda_workspace_macro::auto_workspace;
 use ag_types::{GpuCurveAffine, GpuRepr, PrimeFieldRepr};
@@ -10,14 +9,24 @@ use std::marker::PhantomData;
 
 use crate::{GLOBAL, LOCAL};
 
+mod toggle {
+    #![allow(unused)]
+
+    use crate::pairing_suite::{G1Config, G2Config, Scalar};
+    use ag_types::GpuCurveAffine;
+    use ark_ec::short_weierstrass::Affine;
+
+    pub trait GpuMsm: GpuCurveAffine<Scalar = Scalar> {}
+
+    #[cfg(feature = "g1-msm")]
+    impl GpuMsm for Affine<G1Config> {}
+
+    #[cfg(feature = "g2-msm")]
+    impl GpuMsm for Affine<G2Config> {}
+}
+use toggle::GpuMsm;
+
 pub struct DeviceAffineSlice<T: GpuCurveAffine>(DeviceData, PhantomData<T>);
-
-pub trait GpuMsm: GpuCurveAffine<Scalar = Scalar> {}
-
-#[cfg(feature = "g1-msm")]
-impl GpuMsm for ark_ec::short_weierstrass::Affine<G1Config> {}
-#[cfg(feature = "g2-msm")]
-impl GpuMsm for ark_ec::short_weierstrass::Affine<G2Config> {}
 
 fn filter_out_zero<T: Copy + AffineRepr, U: Copy + BigInteger>(
     bases: &[T], exps: &[U], num_chunks: usize, default_base: T,

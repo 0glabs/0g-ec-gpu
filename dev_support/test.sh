@@ -46,10 +46,19 @@ if [[ $CUDA_TEST_EXITCODE -eq 0 ]]; then
     echoStep "Test (bls12-381)"
     cargo test -r -p ag-cuda-ec --no-default-features --features ag-cuda-ec/bls12-381 ag-cuda-ec/all-algo
 
+    echoStep "Test Single Feature fr-fft"
     cargo test -r -p ag-cuda-ec --no-default-features --features ag-cuda-ec/bn254,ag-cuda-ec/fr-fft
+
+    echoStep "Test Single Feature g1-fft"
     cargo test -r -p ag-cuda-ec --no-default-features --features ag-cuda-ec/bn254,ag-cuda-ec/g1-fft
+    
+    echoStep "Test Single Feature g2-fft"
     cargo test -r -p ag-cuda-ec --no-default-features --features ag-cuda-ec/bn254,ag-cuda-ec/g2-fft
+    
+    echoStep "Test Single Feature g1-msm"
     cargo test -r -p ag-cuda-ec --no-default-features --features ag-cuda-ec/bn254,ag-cuda-ec/g1-msm
+
+    echoStep "Test Single Feature g2-msm"
     cargo test -r -p ag-cuda-ec --no-default-features --features ag-cuda-ec/bn254,ag-cuda-ec/g2-msm
 
     # echoStep "Bench (bn254)"

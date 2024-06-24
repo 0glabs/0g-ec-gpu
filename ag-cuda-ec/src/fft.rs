@@ -2,7 +2,7 @@
 use crate::pairing_suite::{
     Affine, Affine2, Curve, G1Config, G2Config, Scalar,
 };
-use ag_cuda_proxy::{ActiveWorkspace, DeviceParam, KernelConfig};
+use ag_cuda_proxy::{ActiveWorkspace, DeviceParam, Kernel, KernelConfig};
 use ag_cuda_workspace_macro::auto_workspace;
 use ark_ff::Field;
 use ark_std::{One, Zero};
@@ -10,28 +10,41 @@ use rustacuda::error::CudaResult;
 
 use crate::{GLOBAL, LOCAL};
 
-pub trait GpuFftField: Zero + Clone + Copy {
-    const TWIDDLE_LIST: bool;
-    fn name() -> String;
-}
-#[cfg(feature = "fr-fft")]
-impl GpuFftField for Scalar {
-    const TWIDDLE_LIST: bool = true;
+mod toggle {
+    #![allow(unused)]
 
-    fn name() -> String { <Scalar as ag_types::GpuName>::name() }
-}
-#[cfg(feature = "g1-fft")]
-impl GpuFftField for ark_ec::short_weierstrass::Projective<G1Config> {
-    const TWIDDLE_LIST: bool = false;
+    use crate::pairing_suite::{Affine, Affine2, G1Config, G2Config, Scalar};
+    use ag_types::GpuName;
+    use ark_std::Zero;
 
-    fn name() -> String { <Affine as ag_types::GpuName>::name() }
-}
-#[cfg(feature = "g2-fft")]
-impl GpuFftField for ark_ec::short_weierstrass::Projective<G2Config> {
-    const TWIDDLE_LIST: bool = false;
+    pub trait GpuFftField: Zero + Clone + Copy {
+        const TWIDDLE_LIST: bool;
+        fn name() -> String;
+    }
 
-    fn name() -> String { <Affine2 as ag_types::GpuName>::name() }
+    #[cfg(feature = "fr-fft")]
+    impl GpuFftField for Scalar {
+        const TWIDDLE_LIST: bool = true;
+
+        fn name() -> String { <Scalar as GpuName>::name() }
+    }
+
+    #[cfg(feature = "g1-fft")]
+    impl GpuFftField for ark_ec::short_weierstrass::Projective<G1Config> {
+        const TWIDDLE_LIST: bool = false;
+
+        fn name() -> String { <Affine as GpuName>::name() }
+    }
+
+    #[cfg(feature = "g2-fft")]
+    impl GpuFftField for ark_ec::short_weierstrass::Projective<G2Config> {
+        const TWIDDLE_LIST: bool = false;
+
+        fn name() -> String { <Affine2 as GpuName>::name() }
+    }
 }
+
+use toggle::GpuFftField;
 
 #[auto_workspace]
 pub fn radix_fft<T: GpuFftField>(
@@ -49,6 +62,43 @@ pub fn radix_ifft<T: GpuFftField>(
 ) -> CudaResult<()> {
     let offset = offset_inv.unwrap_or(Scalar::one());
     radix_fft_inner(workspace, input, omegas, offset, size_inv, true)
+}
+
+fn mul_by_field<'a, T: GpuFftField>(
+    kernel: Kernel<'a>, device: &DeviceParam<'_, T>, n: usize, g: Scalar,
+    c: Scalar,
+) -> CudaResult<Kernel<'a>> {
+    let gc_flag = {
+        let mut ans = 0;
+        if !g.is_one() {
+            ans |= 0x2;
+        }
+        if !c.is_one() {
+            ans |= 0x1;
+        }
+        ans
+    };
+
+    if gc_flag == 0 {
+        return Ok(kernel);
+    }
+
+    let local_work_size = std::cmp::min(64, n);
+    let global_work_size = n / local_work_size;
+    let config = KernelConfig {
+        global_work_size,
+        local_work_size,
+        shared_mem: 0,
+    };
+    kernel
+        .func(&format!("{}_mul_by_field", T::name()))?
+        .dev_arg(device)?
+        .val(n)?
+        .val(g)?
+        .val(c)?
+        .val(gc_flag)?
+        .launch(config)?
+        .complete()
 }
 
 fn radix_fft_inner<T: GpuFftField>(
@@ -89,34 +139,8 @@ fn radix_fft_inner<T: GpuFftField>(
 
     let mut kernel = workspace.create_kernel()?;
 
-    let gc_flag = {
-        let mut ans = 0;
-        if !g.is_one() {
-            ans |= 0x2;
-        }
-        if !c.is_one() {
-            ans |= 0x1;
-        }
-        ans
-    };
-
-    if gc_flag != 0 && !after {
-        let local_work_size = std::cmp::min(64, n);
-        let global_work_size = n / local_work_size;
-        let config = KernelConfig {
-            global_work_size,
-            local_work_size,
-            shared_mem: 0,
-        };
-        kernel = kernel
-            .func(&format!("{}_mul_by_field", T::name()))?
-            .dev_arg(&input_gpu)?
-            .val(n)?
-            .val(g)?
-            .val(c)?
-            .val(gc_flag)?
-            .launch(config)?
-            .complete()?;
+    if !after {
+        kernel = mul_by_field(kernel, &input_gpu, n, g, c)?;
     }
 
     // Specifies log2 of `p`, (http://www.bealto.com/gpu-fft_group-1.html)
@@ -171,40 +195,24 @@ fn radix_fft_inner<T: GpuFftField>(
         DeviceParam::swap_device_pointer(&mut input_gpu, &mut output_gpu);
     }
 
-    if gc_flag != 0 && after {
-        let local_work_size = std::cmp::min(64, n);
-        let global_work_size = n / local_work_size;
-        let config = KernelConfig {
-            global_work_size,
-            local_work_size,
-            shared_mem: 0,
-        };
-        kernel
-            .func(&format!("{}_mul_by_field", T::name()))?
-            .dev_arg(&input_gpu)?
-            .val(n)?
-            .val(g)?
-            .val(c)?
-            .val(gc_flag)?
-            .launch(config)?
-            .complete()?;
+    if after {
+        kernel = mul_by_field(kernel, &input_gpu, n, g, c)?;
     }
 
     input_gpu.to_host(&stream)?;
+    std::mem::drop(kernel);
 
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(unused)]
-
-    use core::prelude::v1;
-    use std::any::Any;
-
-    use crate::pairing_suite::{Curve, Curve2, Scalar};
+    use super::*;
+    use crate::{pairing_suite::Scalar, test_tools::random_input};
     use ark_ff::{FftField, Field};
-    use ark_poly::{EvaluationDomain, Radix2EvaluationDomain};
+    use ark_poly::{
+        domain::DomainCoeff, EvaluationDomain, Radix2EvaluationDomain,
+    };
     use ark_std::{
         rand::{
             distributions::{Distribution, Standard},
@@ -212,10 +220,6 @@ mod tests {
         },
         Zero,
     };
-    use once_cell::sync::Lazy;
-
-    use super::*;
-    use crate::test_tools::random_input;
 
     fn omegas(n: usize) -> [Scalar; 32] {
         let mut omegas = [Scalar::zero(); 32];
@@ -238,152 +242,124 @@ mod tests {
         omegas
     }
 
-    fn test_fft_inner<T: GpuFftField + Any + Eq>(
-        gpu: impl Fn(&mut [T]), cpu: impl Fn(&[T]) -> Vec<T>,
-    ) where Standard: Distribution<T> {
-        let mut rng = thread_rng();
-        for degree in 4..8 {
-            let n = 1 << degree;
-            println!(
-                "Testing FFT for {} elements type {}",
-                n,
-                std::any::type_name::<T>()
-            );
+    trait FftTestTask {
+        fn gpu<T: GpuFftField>(input: &mut [T]);
+        fn cpu<T: DomainCoeff<Scalar>>(input: &[T]) -> Vec<T>;
+        fn test<T: GpuFftField + DomainCoeff<Scalar>>()
+        where Standard: Distribution<T> {
+            let mut rng = thread_rng();
+            for degree in 4..8 {
+                let n = 1 << degree;
+                println!(
+                    "Testing FFT for {} elements type {}",
+                    n,
+                    std::any::type_name::<T>()
+                );
 
-            let mut v1_coeffs = random_input(n, &mut rng);
-            let mut v2_coeffs = v1_coeffs.clone();
+                let mut v1_coeffs = random_input(n, &mut rng);
+                let mut v2_coeffs = v1_coeffs.clone();
 
-            gpu(&mut v1_coeffs);
-            let v2_coeffs = cpu(&mut v2_coeffs);
+                Self::gpu::<T>(&mut v1_coeffs);
+                let v2_coeffs = Self::cpu::<T>(&mut v2_coeffs);
 
-            if v1_coeffs != v2_coeffs {
-                panic!("wrong answer");
+                if v1_coeffs != v2_coeffs {
+                    panic!("wrong answer");
+                }
             }
+        }
+
+        fn test_all() {
+            #[cfg(feature = "fr-fft")]
+            Self::test::<Scalar>();
+            #[cfg(feature = "g1-fft")]
+            Self::test::<crate::pairing_suite::Curve>();
+            #[cfg(feature = "g2-fft")]
+            Self::test::<crate::pairing_suite::Curve2>();
         }
     }
 
     type Domain = Radix2EvaluationDomain<Scalar>;
 
-    #[cfg(feature = "fr-fft")]
     #[test]
-    fn test_scalar_fft() {
-        test_fft_inner(
-            |v| radix_fft_mt::<Scalar>(v, &omegas(v.len()), None).unwrap(),
-            |v| Domain::new(v.len()).unwrap().fft(&v),
-        );
+    fn test_fft() {
+        struct Fft;
+        Fft::test_all();
+
+        impl FftTestTask for Fft {
+            fn gpu<T: GpuFftField>(v: &mut [T]) {
+                radix_fft_mt::<T>(v, &omegas(v.len()), None).unwrap()
+            }
+
+            fn cpu<T: DomainCoeff<Scalar>>(v: &[T]) -> Vec<T> {
+                Domain::new(v.len()).unwrap().fft(v)
+            }
+        }
     }
 
-    #[cfg(feature = "fr-fft")]
     #[test]
-    fn test_scalar_ifft() {
-        let domain = |n| Domain::new(n).unwrap();
-        test_fft_inner(
-            |v| {
-                radix_ifft_mt::<Scalar>(
+    fn test_ifft() {
+        struct Ifft;
+        Ifft::test_all();
+
+        impl FftTestTask for Ifft {
+            fn gpu<T: GpuFftField>(v: &mut [T]) {
+                let size_inv = Scalar::from(v.len() as u64).inverse().unwrap();
+                radix_ifft_mt::<T>(v, &omegas_inv(v.len()), None, size_inv)
+                    .unwrap()
+            }
+
+            fn cpu<T: DomainCoeff<Scalar>>(v: &[T]) -> Vec<T> {
+                Domain::new(v.len()).unwrap().ifft(v)
+            }
+        }
+    }
+
+    #[test]
+    fn test_fft_coset() {
+        struct FftCoset;
+        FftCoset::test_all();
+
+        impl FftTestTask for FftCoset {
+            fn gpu<T: GpuFftField>(v: &mut [T]) {
+                let coset = Scalar::from(4);
+                radix_fft_mt::<T>(v, &omegas(v.len()), Some(coset)).unwrap()
+            }
+
+            fn cpu<T: DomainCoeff<Scalar>>(v: &[T]) -> Vec<T> {
+                Domain::new(v.len())
+                    .unwrap()
+                    .get_coset(4.into())
+                    .unwrap()
+                    .fft(v)
+            }
+        }
+    }
+
+    #[test]
+    fn test_ifft_coset() {
+        struct IfftCoset;
+        IfftCoset::test_all();
+
+        impl FftTestTask for IfftCoset {
+            fn gpu<T: GpuFftField>(v: &mut [T]) {
+                let coset_inv = Scalar::from(4).inverse().unwrap();
+                let size_inv = Scalar::from(v.len() as u64).inverse().unwrap();
+                radix_ifft_mt::<T>(
                     v,
                     &omegas_inv(v.len()),
-                    None,
-                    domain(v.len()).size_inv,
+                    Some(coset_inv),
+                    size_inv,
                 )
                 .unwrap()
-            },
-            |v| domain(v.len()).ifft(&v),
-        );
-    }
+            }
 
-    #[cfg(feature = "fr-fft")]
-    #[test]
-    fn test_scalar_fft_coset() {
-        let domain =
-            |n| Domain::new(n).unwrap().get_coset(Scalar::from(4)).unwrap();
-        test_fft_inner(
-            |v| {
-                radix_fft_mt::<Scalar>(
-                    v,
-                    &omegas(v.len()),
-                    Some(domain(v.len()).coset_offset()),
-                )
-                .unwrap()
-            },
-            |v| domain(v.len()).fft(&v),
-        );
-    }
-
-    #[cfg(feature = "fr-fft")]
-    #[test]
-    fn test_scalar_ifft_coset() {
-        let domain =
-            |n| Domain::new(n).unwrap().get_coset(Scalar::from(4)).unwrap();
-        test_fft_inner(
-            |v| {
-                let d = domain(v.len());
-                radix_ifft_mt::<Scalar>(
-                    v,
-                    &omegas_inv(v.len()),
-                    Some(d.coset_offset_inv()),
-                    d.size_inv,
-                )
-                .unwrap()
-            },
-            |v| domain(v.len()).ifft(&v),
-        );
-    }
-
-    #[cfg(feature = "g1-fft")]
-    #[test]
-    fn test_ec_fft() {
-        test_fft_inner(
-            |v| radix_fft_mt::<Curve>(v, &omegas(v.len()), None).unwrap(),
-            |v| Domain::new(v.len()).unwrap().fft(&v),
-        );
-    }
-
-    #[cfg(feature = "g1-fft")]
-    #[test]
-    fn test_ec_ifft_coset() {
-        let domain =
-            |n| Domain::new(n).unwrap().get_coset(Scalar::from(4)).unwrap();
-        test_fft_inner(
-            |v| {
-                let d = domain(v.len());
-                radix_ifft_mt::<Curve>(
-                    v,
-                    &omegas_inv(v.len()),
-                    Some(d.coset_offset_inv()),
-                    d.size_inv,
-                )
-                .unwrap()
-            },
-            |v| domain(v.len()).ifft(&v),
-        );
-    }
-
-    #[cfg(feature = "g2-fft")]
-    #[test]
-    fn test_ec_g2_fft() {
-        test_fft_inner(
-            |v| radix_fft_mt::<Curve2>(v, &omegas(v.len()), None).unwrap(),
-            |v| Domain::new(v.len()).unwrap().fft(&v),
-        );
-    }
-
-    #[cfg(feature = "g2-fft")]
-    #[test]
-    fn test_ec_g2_ifft_coset() {
-        let domain =
-            |n| Domain::new(n).unwrap().get_coset(Scalar::from(4)).unwrap();
-        test_fft_inner(
-            |v| {
-                let d = domain(v.len());
-                radix_ifft_mt::<Curve2>(
-                    v,
-                    &omegas_inv(v.len()),
-                    Some(d.coset_offset_inv()),
-                    d.size_inv,
-                )
-                .unwrap()
-            },
-            |v| domain(v.len()).ifft(&v),
-        );
+            fn cpu<T: DomainCoeff<Scalar>>(v: &[T]) -> Vec<T> {
+                Domain::new(v.len())
+                    .unwrap()
+                    .get_coset(4.into())
+                    .unwrap()
+                    .ifft(v)
+            }
+        }
     }
 }
