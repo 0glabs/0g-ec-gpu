@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use crate::pairing_suite::Scalar;
 use ag_cuda_proxy::{ActiveWorkspace, DeviceData, KernelConfig};
 use ag_cuda_workspace_macro::auto_workspace;
@@ -7,8 +5,26 @@ use ag_types::{GpuCurveAffine, GpuRepr, PrimeFieldRepr};
 use ark_ec::AffineRepr;
 use ark_ff::{BigInteger, Zero};
 use rustacuda::error::CudaResult;
+use std::marker::PhantomData;
 
 use crate::{GLOBAL, LOCAL};
+
+mod toggle {
+    #![allow(unused)]
+
+    use crate::pairing_suite::{G1Config, G2Config, Scalar};
+    use ag_types::GpuCurveAffine;
+    use ark_ec::short_weierstrass::Affine;
+
+    pub trait GpuMsm: GpuCurveAffine<Scalar = Scalar> {}
+
+    #[cfg(feature = "g1-msm")]
+    impl GpuMsm for Affine<G1Config> {}
+
+    #[cfg(feature = "g2-msm")]
+    impl GpuMsm for Affine<G2Config> {}
+}
+use toggle::GpuMsm;
 
 pub struct DeviceAffineSlice<T: GpuCurveAffine>(DeviceData, PhantomData<T>);
 
@@ -37,7 +53,7 @@ fn filter_out_zero<T: Copy + AffineRepr, U: Copy + BigInteger>(
 }
 
 #[auto_workspace]
-pub fn multiexp<T: GpuCurveAffine<Scalar = Scalar>>(
+pub fn multiexp<T: GpuMsm>(
     workspace: &ActiveWorkspace, bases: &[T],
     exponents: &[<Scalar as PrimeFieldRepr>::Repr], num_chunks: usize,
     window_size: usize, neg_is_cheap: bool,
@@ -57,7 +73,7 @@ pub fn multiexp<T: GpuCurveAffine<Scalar = Scalar>>(
 }
 
 #[auto_workspace]
-pub fn upload_multiexp_bases<T: GpuCurveAffine<Scalar = Scalar>>(
+pub fn upload_multiexp_bases<T: GpuMsm>(
     workspace: &ActiveWorkspace, bases: &[T],
 ) -> CudaResult<DeviceAffineSlice<T>> {
     let bases_gpu_repr: Vec<_> =
@@ -70,7 +86,7 @@ pub fn upload_multiexp_bases<T: GpuCurveAffine<Scalar = Scalar>>(
 }
 
 #[auto_workspace]
-pub fn multiple_multiexp<T: GpuCurveAffine<Scalar = Scalar>>(
+pub fn multiple_multiexp<T: GpuMsm>(
     workspace: &ActiveWorkspace, bases_gpu: &DeviceAffineSlice<T>,
     exponents: &[<Scalar as PrimeFieldRepr>::Repr], num_chunks: usize,
     window_size: usize, neg_is_cheap: bool,
@@ -131,6 +147,8 @@ pub fn multiple_multiexp<T: GpuCurveAffine<Scalar = Scalar>>(
 
 #[cfg(test)]
 mod tests {
+    #![allow(unused)]
+
     use crate::pairing_suite::{Affine, Affine2, Curve, Curve2, Scalar};
     use ag_types::PrimeFieldRepr;
     use ark_ec::VariableBaseMSM;
@@ -139,6 +157,7 @@ mod tests {
     use super::*;
     use crate::test_tools::random_input;
 
+    #[cfg(feature = "g1-msm")]
     #[test]
     fn test_multiexp() {
         let mut rng = thread_rng();
@@ -159,6 +178,7 @@ mod tests {
         assert_eq!(res, expected);
     }
 
+    #[cfg(feature = "g2-msm")]
     #[test]
     fn test_multiexp_g2() {
         let mut rng = thread_rng();
@@ -180,6 +200,7 @@ mod tests {
         assert_eq!(res, expected);
     }
 
+    #[cfg(feature = "g1-msm")]
     #[test]
     fn test_multiexp_batch() {
         let mut rng = thread_rng();

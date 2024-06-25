@@ -1,4 +1,6 @@
+#[cfg(any(feature = "fr-fft", feature = "g1-fft", feature = "g2-fft"))]
 pub mod fft;
+#[cfg(any(feature = "g1-msm", feature = "g2-msm"))]
 pub mod multiexp;
 pub mod pairing_suite;
 pub mod test_tools;

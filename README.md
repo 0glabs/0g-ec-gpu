@@ -14,7 +14,7 @@ This project is a module for GPU-accelerated elliptic curve calculations for the
 
 ### Compilation Environment
 
-Set up the CUDA build cache directory to reduce the number of nvcc compilations:
+Set up the CUDA build cache directory to reduce repeated nvcc compilations over the same source code:
 
 ```sh
 mkdir .cache
@@ -63,7 +63,7 @@ export ARK_GPU_BUILD_DIR=$(pwd)/.cache
     use ag_cuda_proxy::ActiveWorkspace;
 
     #[auto_workspace]
-    pub fn radix_ec_fft(
+    pub fn radix_fft(
         workspace: &ActiveWorkspace, input: &mut Vec<Curve>, omegas: &[Scalar],
     )
     ```
@@ -72,12 +72,13 @@ export ARK_GPU_BUILD_DIR=$(pwd)/.cache
 
 ### Compiling and Calling GPU Functions
 
-1. In the example above, ag-ec-proxy adds two new functions on top of `radix_ec_fft`: `radix_ec_fft_st` and `radix_ec_fft_mt`. The `_st` suffix represents single-threaded mode, using a global unique CUDA context, while `_mt` suffix represents multi-threaded mode, where each thread has its own CUDA context. (Note: there are bugs when running multi-threaded mode concurrently).
+1. In the example above, ag-ec-proxy adds two new functions on top of `radix_fft`: `radix_fft_st` and `radix_fft_mt`. The `_st` suffix represents single-threaded mode, using a global unique CUDA context, while `_mt` suffix represents multi-threaded mode, where each thread has its own CUDA context. (Note: there are bugs when running multi-threaded mode concurrently).
 
    For the original function:
 
     ```rust
-    pub fn radix_ec_fft(
+    #[auto_workspace]
+    pub fn radix_fft(
         workspace: &ActiveWorkspace, input: &mut Vec<Curve>, omegas: &[Scalar],
     )
     ```
@@ -85,7 +86,7 @@ export ARK_GPU_BUILD_DIR=$(pwd)/.cache
    The modified functions without `ActiveWorkspace` parameter are:
 
     ```rust
-    pub fn radix_ec_fft_st(
+    pub fn radix_fft_st(
         input: &mut Vec<Curve>, omegas: &[Scalar],
     )
     ```
@@ -98,34 +99,25 @@ export ARK_GPU_BUILD_DIR=$(pwd)/.cache
 
 ## Developed Functions
 
-### Elliptic Curve FFT
+The `ag-cuda-ec` library includes GPU implementations for Fast Fourier Transform (FFT) and Multi Scalar Multiplication (MSM).
 
-```rust
-pub fn radix_ec_fft(
-    workspace: &ActiveWorkspace, input: &mut Vec<Curve>, omegas: &[Scalar],
-)
-```
+### Curve Features
 
-Takes bn254 or bls12-381 G1 projective points as input (from the arkworks library) and a list of FFT omega powers \([w^{2^0}, w^{2^1}, ...]\), and computes the FFT.
+This crate supports two pairing suites curves, configurable via features in the compiled version:
+- `bn254`: Enables the BN254 curve.
+- `bls12-381`: Enables the BLS12-381 curve.
 
-    
+**Note:** Exactly one of the above features must be selected. The default configuration uses the `bn254` curve.
 
-### Multi-base Multi-scalar Multiplication
+### Implementation Features
 
-```rust
-pub fn multiple_multiexp(
-    workspace: &ActiveWorkspace, bases_gpu: &DeviceData,
-    exponents: &[<Scalar as PrimeFieldRepr>::Repr], num_chunks: usize,
-    window_size: usize, neg_is_cheap: bool,
-)
-```
+The library provides several GPU-accelerated implementations for both FFT and MSM operations:
+- `fr-fft`: Performs FFT over the scalar field of the selected pairing suite.
+- `g1-fft`: Performs FFT over the primary curve of the selected pairing suite.
+- `g2-fft`: Performs FFT over the twisted curve of the selected pairing suite.
+- `g1-msm`: Conducts MSM operations on the primary curve of the selected pairing suite.
+- `g2-msm`: Conducts MSM operations on the twisted curve of the selected pairing suite.
 
-Takes multiple rows of bn254 or bls12-381 G1 affine points as input and a row of exponents (G1 group's scalar field, non-Montgomery form). Outputs a row of MSM results for the input and each row of G1 affine points.
-- G1 affine points need to be uploaded to GPU memory in advance via `upload_multiexp_bases` as they are repeatedly used in actual operations.
-- Additional parameters:
-    - `num_chunks`: Number of chunks the task is divided into, each chunk completed by a set of CUDA kernels.
-    - `window_size`: Parameter for the MSM algorithm, generally between 2 and 10. Larger values might exceed GPU memory.
-    - `neg_is_cheap`: Indicates if computing the negation of a G1 point is easy.
 
 ## Open Source Project Derivative Work Statement
 
@@ -133,7 +125,7 @@ The GPU code for prime field and elliptic curve operations is derived from [ec-g
 
 - Original project only supports the bls12-381 curve; modifications add support for the bn254 curve.
 - Original project uses zkcrypto's cryptographic library; modifications use arkworks.
-- `ec-fft` is implemented based on the original `field-fft`, and `multiexp` has a rewritten algorithm.
+- `fft` is implemented based on the original `field-fft`, and `multiexp` has a rewritten algorithm.
 - Original project supports both OpenCL and CUDA; this project fully tests only the CUDA part, with no adaptations or tests for OpenCL.
 
 # Licenses
