@@ -1,8 +1,8 @@
 #![allow(unused, unused_mut)]
 
-#[cfg(feature = "bn254")]
-use ark_bn254::{Fr, G1Affine, G2Affine};
 #[cfg(feature = "bls12-381")]
+use ark_bls12_381::{Fr, G1Affine, G2Affine};
+#[cfg(feature = "bn254")]
 use ark_bn254::{Fr, G1Affine, G2Affine};
 
 #[cfg(not(any(feature = "bls12-381", feature = "bn254")))]

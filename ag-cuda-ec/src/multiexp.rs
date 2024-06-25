@@ -28,6 +28,12 @@ use toggle::GpuMsm;
 
 pub struct DeviceAffineSlice<T: GpuCurveAffine>(DeviceData, PhantomData<T>);
 
+impl<T: GpuCurveAffine> DeviceAffineSlice<T> {
+    pub fn size(&self) -> usize {
+        self.0.size() / std::mem::size_of::<<T as GpuRepr>::Repr>()
+    }
+}
+
 fn filter_out_zero<T: Copy + AffineRepr, U: Copy + BigInteger>(
     bases: &[T], exps: &[U], num_chunks: usize, default_base: T,
 ) -> (Vec<T>, Vec<U>) {
